@@ -1,0 +1,230 @@
+	#include <stdio.h>	
+	#include <stdlib.h>
+	#include <string.h>
+    	#include <fcntl.h>
+    	#include <sys/mman.h>//mmap head file
+
+
+	#include "get_time.h"
+	#include "global_def.h"
+	#include "global_api.h"
+
+
+	char first_loop = 1;
+
+	char *INT_DEV= "/dev/PL";
+	char *MEM_DEV= "/dev/mem";
+
+
+    	int main (int argc, char* argv[])
+    	{
+	       FILE *fp=NULL;
+		unsigned int num_loops=0;
+		unsigned int start_loops=0;
+		unsigned int reboot_mini=1;
+		int i,j;
+	       int fd_pl_int,fd_mem, fd_serial1;
+	       
+		unsigned int *start_loadcell;
+		
+	       unsigned int configuration_int;
+
+
+		char sys_cmd[MAXSTRING];
+		char moDayDir[MAXSTRING];
+		char hourDir[MAXSTRING];
+		char hourDir_baro[MAXSTRING];
+		char tm[MAXSTRING];
+		char cmd[MAXSTRING];
+
+		char FOLDER_NAME[MAXSTRING];
+		char deviceID[5] = "0000";
+		static Current_tm time_struct={"0000","000","00","00","00","00"};
+		char imFile[MAXSTRING];
+		char yrMonDayHrMinSec[MAXSTRING];
+
+		char loadcellFile_new[MAXSTRING];
+
+
+
+		char config_file[MAXSTRING];
+		option_struct  *global_options;
+		
+		char rtc_cmd[MAXSTRING];
+
+
+		unsigned int cfg_tmp;
+		int int_num_cur;
+		int int_num_new;
+
+		int loadcell_size;
+		loadcell_size = (4*4*80);
+
+		//*******************************************************Open device********************************************************************//
+		////open interruption
+		fd_pl_int = open(INT_DEV,O_RDWR);
+		if(fd_pl_int<0)
+		{			
+			perror("cannot open zbutton int\n");
+			return 1;
+		}
+
+		////Open mem device
+		//open /dev/mem with read and write mode
+		fd_mem = open (MEM_DEV, O_RDWR|O_SYNC);//O_RDONLY);//
+		if (fd_mem < 0)
+		{
+			printf("cannot open /dev/mem.");
+			return -1;
+		}
+
+		//******************************************************** MMAP physical memory ***************************************************************//
+		////map physical memory for configuration 						
+		start_loadcell = (unsigned int *)mmap(NULL, loadcell_size, PROT_READ|PROT_WRITE, MAP_SHARED, fd_mem, PHY_ADDR_loadcell);
+		if (start_loadcell == 0)
+		{
+			printf("NULL pointer!\n");
+		}
+
+		//***************************************************************************************************************************//
+
+		printf("/**************************************************************************/\n");
+
+		int_num_cur=0;
+		int_num_new=0;
+		int_num_cur = poll_int(fd_pl_int);
+
+		while(1)//
+		{
+			//num_loops--;
+			//start_loops++;
+
+
+			////poll interruption from PL
+			do
+			{
+				int_num_new = poll_int(fd_pl_int);
+				for(i=0;i<100;i++)
+					i=i;
+			}while(int_num_cur==int_num_new);	      
+
+
+			//************************************************* Path generation **************************************************************************//
+			get_time(&time_struct);
+
+			//printf("store data to %s\n",PATH); //PATH="/sdcard/"
+			strcpy(moDayDir,"~/Data");//PATH);
+			//printf("moDayDir is %s\n",moDayDir);
+
+			sprintf(FOLDER_NAME,"%s%s%c%s%c%02d","ID",deviceID, '_',time_struct.time_month,'.',atoi(time_struct.time_day));	 //month.day
+
+			strcat(moDayDir,FOLDER_NAME);
+			//printf("folder is %s\n",FOLDER_NAME);
+			//printf("moDayDir is %s\n",moDayDir); 
+			strcpy(sys_cmd,"mkdir -p ");
+			strcat(sys_cmd,moDayDir);
+			system(sys_cmd);
+
+			sprintf(moDayDir,"%s%c",moDayDir,'/'); //moDayDir: sdcard/month.day/
+
+			get_time(&time_struct); //update time
+
+			/// create a folder named as the current hour 
+			sprintf(hourDir,"%s%d%c",moDayDir,atoi(time_struct.time_hour),'/');// moDayDir: sdard/month.day/; folderHead: hour
+			//printf("hourDir is %s\n",hourDir);
+			strcpy(cmd,"mkdir -p ");
+			strcat(cmd,hourDir);
+			system(cmd);
+			//******************************************************* end ********************************************************************//
+
+			get_time(&time_struct);
+				sprintf(yrMonDayHrMinSec,"%s%s%02d%c%s%s%s",time_struct.time_year,time_struct.time_month,atoi(time_struct.time_day),'_',time_struct.time_hour,time_struct.time_min, time_struct.time_sec);
+				//strcat(yrMonDayHrMinSec,".dat");
+
+	
+			//******************************************************* save barometer  ********************************************************************//				
+				//sprintf(baroFile_new,"%s%s%c%s%s%s",hourDir_baro,deviceID,'_',"baro_",yrMonDayHrMinSec,".txt");
+
+				sprintf(loadcellFile_new,"%s%s%c%s%s",hourDir,deviceID,'_',"loadcell", ".txt");
+
+				LOADCELL_save(loadcellFile_new, 80, start_baro, first_loop);	
+				//memcpy(baroFile_old, baroFile_new, MAXSTRING);
+			
+			
+			first_loop = 0;
+
+			int_num_cur = int_num_new;
+						
+		}
+		
+		//////////////////////////////////////////////////////////////////////////
+		
+
+		munmap(start_loadcell, loadcell_size); //destroy map memory
+
+		close(fd_mem);  //close file
+
+		close(fd_pl_int);
+
+		strcpy(cmd,"reboot");//poweroff
+		system(cmd);
+
+	       return 0;
+    	}
+
+	int poll_int(int fd)
+	{
+	
+		int int_num;
+		char buff;
+
+		buff = read(fd, &int_num, sizeof(int));
+		
+		return int_num;
+
+	}
+
+	int LOADCELL_save(char *imFile, unsigned char loadcell_fs, unsigned int *start_loadcell, char header)
+	{
+		FILE *fp=NULL;
+		float sensor_a, sensor_b, sensor_c, sensor_d;
+		int i;
+		static Current_tm time_struct={"0000","000","00","00","00","00"};
+		char	time_print[50];
+		char HrMinSec[MAXSTRING];
+
+		float scale = -10080.0;
+
+		//create file
+		fp=fopen(imFile, "a+");//"wb");
+		if(NULL==fp)
+		{
+			return -1;
+			printf("file fails!\n");
+		}
+
+		if(header)
+			fprintf(fp, "time(hhmmss), sensor_A, sensor_B, sensor_C, sensor_D\n");
+
+		get_time(&time_struct);
+		sprintf(time_print,"%d%c%d%c%d%c%d",atoi(time_struct.time_day),'.',atoi(time_struct.time_hour),'.',atoi(time_struct.time_min),'.',atoi(time_struct.time_sec));
+//sprintf(HrMinSec,"%s%s%s",time_struct.time_hour,time_struct.time_min, time_struct.time_sec);		
+		for(i = 0;i < loadcell_fs; i++)
+		{			
+			sensor_a = ((float)(start_loadcell[4*i+0]))/scale;
+			sensor_b = ((float)(start_loadcell[4*i+1]))/scale;
+			sensor_c = ((float)(start_loadcell[4*i+2]))/scale;
+			sensor_d = ((float)(start_loadcell[4*i+3]))/scale;
+
+			fprintf(fp, "%5.2f,%5.2f,%5.2f,%5.2f,%s\n", sensor_a, sensor_b, sensor_c, sensor_d, time_print);					
+		}
+
+		//flush data
+		fflush(fp);
+
+		//close file
+		fclose(fp);
+
+		return 0;
+	}
+
